@@ -1,0 +1,17 @@
+# prometheus.yml
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+  - job_name: 'catalog-service'
+    static_configs:
+      - targets: ['catalog-service:8080']
+  - job_name: 'circulation-service'
+    static_configs:
+      - targets: ['circulation-service:8080']
+  - job_name: 'membership-service'
+    static_configs:
+      - targets: ['membership-service:8080']

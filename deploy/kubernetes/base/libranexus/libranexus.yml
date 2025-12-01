@@ -1,0 +1,673 @@
+# kubernetes/production/catalog-service.yaml
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: catalog-config
+  namespace: libranexus
+data:
+  LOG_LEVEL: "info"
+  SERVICE_NAME: "catalog-service"
+
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: catalog-secrets
+  namespace: libranexus
+type: Opaque
+stringData:
+  DATABASE_URL: "postgres://libranexus:CHANGEME@postgres:5432/libranexus?sslmode=require"
+  REDIS_URL: "redis://:CHANGEME@redis:6379/0"
+  SEARCH_API_KEY: "CHANGEME"
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: catalog-service
+  namespace: libranexus
+  labels:
+    app: catalog
+    version: v1
+spec:
+  replicas: 3
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: catalog
+  template:
+    metadata:
+      labels:
+        app: catalog
+        version: v1
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: catalog-service
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                - key: app
+                  operator: In
+                  values:
+                  - catalog
+              topologyKey: kubernetes.io/hostname
+      containers:
+      - name: catalog
+        image: libranexus/catalog-service:latest
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 8080
+          name: http
+          protocol: TCP
+        - containerPort: 9090
+          name: metrics
+          protocol: TCP
+        envFrom:
+        - configMapRef:
+            name: catalog-config
+        - secretRef:
+            name: catalog-secrets
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            cpu: 500m
+            memory: 512Mi
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: 8080
+          initialDelaySeconds: 10
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 3
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 1000
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+            - ALL
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: catalog-service
+  namespace: libranexus
+  labels:
+    app: catalog
+spec:
+  type: ClusterIP
+  ports:
+  - port: 8080
+    targetPort: 8080
+    protocol: TCP
+    name: http
+  - port: 9090
+    targetPort: 9090
+    protocol: TCP
+    name: metrics
+  selector:
+    app: catalog
+
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: catalog-hpa
+  namespace: libranexus
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: catalog-service
+  minReplicas: 3
+  maxReplicas: 10
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 80
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+      - type: Percent
+        value: 50
+        periodSeconds: 60
+    scaleUp:
+      stabilizationWindowSeconds: 0
+      policies:
+      - type: Percent
+        value: 100
+        periodSeconds: 15
+
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: catalog-pdb
+  namespace: libranexus
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app: catalog
+
+---
+# Flagger Canary for Progressive Delivery
+apiVersion: flagger.app/v1beta1
+kind: Canary
+metadata:
+  name: catalog-service
+  namespace: libranexus
+spec:
+  targetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: catalog-service
+  service:
+    port: 8080
+  analysis:
+    interval: 1m
+    threshold: 5
+    maxWeight: 50
+    stepWeight: 10
+    metrics:
+    - name: request-success-rate
+      thresholdRange:
+        min: 99
+      interval: 1m
+    - name: request-duration
+      thresholdRange:
+        max: 500
+      interval: 1m
+    - name: error-rate
+      thresholdRange:
+        max: 1
+      interval: 1m
+    webhooks:
+    - name: acceptance-test
+      type: pre-rollout
+      url: http://loadtester.test/
+      timeout: 30s
+      metadata:
+        type: bash
+        cmd: "curl -sd 'test' http://catalog-canary:8080/health"
+    - name: load-test
+      url: http://loadtester.test/
+      timeout: 5s
+      metadata:
+        cmd: "hey -z 1m -q 10 -c 2 http://catalog-canary:8080/api/v1/catalog/search"
+
+---
+# Network Policy for Security
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: catalog-netpol
+  namespace: libranexus
+spec:
+  podSelector:
+    matchLabels:
+      app: catalog
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels:
+          app: api-gateway
+    - podSelector:
+        matchLabels:
+          app: circulation
+    ports:
+    - protocol: TCP
+      port: 8080
+  egress:
+  - to:
+    - podSelector:
+        matchLabels:
+          app: postgres
+    ports:
+    - protocol: TCP
+      port: 5432
+  - to:
+    - podSelector:
+        matchLabels:
+          app: redis
+    ports:
+    - protocol: TCP
+      port: 6379
+  - to:
+    - podSelector:
+        matchLabels:
+          app: meilisearch
+    ports:
+    - protocol: TCP
+      port: 7700
+  - to:
+    - podSelector:
+        matchLabels:
+          app: nats
+    ports:
+    - protocol: TCP
+      port: 4222
+  # DNS egress
+  - to:
+    - namespaceSelector: {}
+    ports:
+    - protocol: UDP
+      port: 53
+
+---
+# ServiceMonitor for Prometheus
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: catalog-monitor
+  namespace: libranexus
+  labels:
+    app: catalog
+spec:
+  selector:
+    matchLabels:
+      app: catalog
+  endpoints:
+  - port: metrics
+    interval: 30s
+    path: /metrics
+
+---
+# ============================================================================
+# CHAOS MESH EXPERIMENTS
+# ============================================================================
+
+# Chaos Experiment: Database Latency Injection
+---
+apiVersion: chaos-mesh.org/v1alpha1
+kind: NetworkChaos
+metadata:
+  name: db-latency-injection
+  namespace: libranexus
+spec:
+  action: delay
+  mode: one
+  selector:
+    namespaces:
+      - libranexus
+    labelSelectors:
+      app: postgres
+  delay:
+    latency: "250ms"
+    correlation: "25"
+    jitter: "50ms"
+  duration: "5m"
+  scheduler:
+    cron: "@daily"
+
+---
+# Chaos Experiment: Pod Failure
+apiVersion: chaos-mesh.org/v1alpha1
+kind: PodChaos
+metadata:
+  name: catalog-pod-kill
+  namespace: libranexus
+spec:
+  action: pod-kill
+  mode: one
+  selector:
+    namespaces:
+      - libranexus
+    labelSelectors:
+      app: catalog
+  scheduler:
+    cron: "0 2 * * *"  # 2 AM daily
+
+---
+# Chaos Experiment: Memory Stress
+apiVersion: chaos-mesh.org/v1alpha1
+kind: StressChaos
+metadata:
+  name: catalog-memory-stress
+  namespace: libranexus
+spec:
+  mode: one
+  selector:
+    namespaces:
+      - libranexus
+    labelSelectors:
+      app: catalog
+  stressors:
+    memory:
+      workers: 4
+      size: "256MB"
+  duration: "2m"
+
+---
+# ============================================================================
+# POSTGRES STATEFULSET
+# ============================================================================
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: postgres-config
+  namespace: libranexus
+data:
+  POSTGRES_DB: libranexus
+  POSTGRES_USER: libranexus
+  PGDATA: /var/lib/postgresql/data/pgdata
+
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: postgres-secrets
+  namespace: libranexus
+type: Opaque
+stringData:
+  POSTGRES_PASSWORD: "CHANGEME"
+
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres
+  namespace: libranexus
+spec:
+  serviceName: postgres
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgres
+  template:
+    metadata:
+      labels:
+        app: postgres
+    spec:
+      containers:
+      - name: postgres
+        image: postgres:16-alpine
+        ports:
+        - containerPort: 5432
+          name: postgres
+        envFrom:
+        - configMapRef:
+            name: postgres-config
+        - secretRef:
+            name: postgres-secrets
+        volumeMounts:
+        - name: postgres-storage
+          mountPath: /var/lib/postgresql/data
+        - name: postgres-init
+          mountPath: /docker-entrypoint-initdb.d
+        resources:
+          requests:
+            cpu: 500m
+            memory: 1Gi
+          limits:
+            cpu: 2000m
+            memory: 4Gi
+        livenessProbe:
+          exec:
+            command:
+            - pg_isready
+            - -U
+            - libranexus
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          exec:
+            command:
+            - pg_isready
+            - -U
+            - libranexus
+          initialDelaySeconds: 10
+          periodSeconds: 5
+      volumes:
+      - name: postgres-init
+        configMap:
+          name: postgres-init-sql
+  volumeClaimTemplates:
+  - metadata:
+      name: postgres-storage
+    spec:
+      accessModes: ["ReadWriteOnce"]
+      storageClassName: fast-ssd
+      resources:
+        requests:
+          storage: 100Gi
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  namespace: libranexus
+spec:
+  type: ClusterIP
+  ports:
+  - port: 5432
+    targetPort: 5432
+    protocol: TCP
+    name: postgres
+  selector:
+    app: postgres
+
+---
+# ============================================================================
+# INGRESS CONFIGURATION
+# ============================================================================
+
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: libranexus-ingress
+  namespace: libranexus
+  annotations:
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+    nginx.ingress.kubernetes.io/rate-limit: "100"
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/proxy-body-size: "10m"
+spec:
+  ingressClassName: nginx
+  tls:
+  - hosts:
+    - api.libranexus.com
+    secretName: libranexus-tls
+  rules:
+  - host: api.libranexus.com
+    http:
+      paths:
+      - path: /api/v1/catalog
+        pathType: Prefix
+        backend:
+          service:
+            name: catalog-service
+            port:
+              number: 8080
+      - path: /api/v1/circulation
+        pathType: Prefix
+        backend:
+          service:
+            name: circulation-service
+            port:
+              number: 8080
+      - path: /api/v1/members
+        pathType: Prefix
+        backend:
+          service:
+            name: membership-service
+            port:
+              number: 8080
+
+---
+# ============================================================================
+# BACKUP CRONJOB
+# ============================================================================
+
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: postgres-backup
+  namespace: libranexus
+spec:
+  schedule: "0 2 * * *"  # 2 AM daily
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 1
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          containers:
+          - name: backup
+            image: postgres:16-alpine
+            command:
+            - /bin/sh
+            - -c
+            - |
+              BACKUP_FILE="/backups/libranexus-$(date +%Y%m%d-%H%M%S).sql.gz"
+              pg_dump -h postgres -U libranexus libranexus | gzip > $BACKUP_FILE
+              echo "Backup completed: $BACKUP_FILE"
+              # Upload to S3 (requires AWS CLI)
+              # aws s3 cp $BACKUP_FILE s3://libranexus-backups/
+            env:
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-secrets
+                  key: POSTGRES_PASSWORD
+            volumeMounts:
+            - name: backup-storage
+              mountPath: /backups
+          restartPolicy: OnFailure
+          volumes:
+          - name: backup-storage
+            persistentVolumeClaim:
+              claimName: backup-pvc
+
+---
+# ============================================================================
+# KEDA AUTOSCALING (Event-driven)
+# ============================================================================
+
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: circulation-scaledobject
+  namespace: libranexus
+spec:
+  scaleTargetRef:
+    name: circulation-service
+  minReplicaCount: 2
+  maxReplicaCount: 20
+  cooldownPeriod: 300
+  triggers:
+  - type: prometheus
+    metadata:
+      serverAddress: http://prometheus:9090
+      metricName: http_requests_total
+      threshold: '100'
+      query: sum(rate(http_requests_total{service="circulation"}[1m]))
+
+---
+# ============================================================================
+# SERVICE MESH (Istio Virtual Service)
+# ============================================================================
+
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: catalog-route
+  namespace: libranexus
+spec:
+  hosts:
+  - catalog-service
+  http:
+  - match:
+    - headers:
+        x-version:
+          exact: canary
+    route:
+    - destination:
+        host: catalog-service
+        subset: canary
+      weight: 10
+    - destination:
+        host: catalog-service
+        subset: stable
+      weight: 90
+    timeout: 5s
+    retries:
+      attempts: 3
+      perTryTimeout: 2s
+      retryOn: 5xx,reset,connect-failure,refused-stream
+  - route:
+    - destination:
+        host: catalog-service
+        subset: stable
+
+---
+apiVersion: networking.istio.io/v1beta1
+kind: DestinationRule
+metadata:
+  name: catalog-destination
+  namespace: libranexus
+spec:
+  host: catalog-service
+  trafficPolicy:
+    connectionPool:
+      tcp:
+        maxConnections: 100
+      http:
+        http1MaxPendingRequests: 50
+        http2MaxRequests: 100
+        maxRequestsPerConnection: 2
+    loadBalancer:
+      simple: LEAST_REQUEST
+    outlierDetection:
+      consecutiveErrors: 5
+      interval: 30s
+      baseEjectionTime: 60s
+      maxEjectionPercent: 50
+  subsets:
+  - name: stable
+    labels:
+      version: v1
+  - name: canary
+    labels:
+      version: v2
