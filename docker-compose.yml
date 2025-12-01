@@ -1,0 +1,133 @@
+# docker-compose.yml
+version: '3.9'
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: libranexus-postgres
+    environment:
+      POSTGRES_DB: libranexus
+      POSTGRES_USER: libranexus
+      POSTGRES_PASSWORD: dev_password_change_in_prod
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./db/migrations/0001_initial_schema.up.sql:/docker-entrypoint-initdb.d/0001_initial_schema.up.sql
+    networks:
+      - libranexus
+
+  redis:
+    image: redis:7-alpine
+    container_name: libranexus-redis
+    ports:
+      - "6379:6379"
+    networks:
+      - libranexus
+
+  nats:
+    image: nats:2.10-alpine
+    container_name: libranexus-nats
+    ports:
+      - "4222:4222"
+    networks:
+      - libranexus
+
+  jaeger:
+    image: jaegertracing/all-in-one:latest
+    container_name: libranexus-jaeger
+    ports:
+      - "16686:16686"
+      - "4317:4317"
+    networks:
+      - libranexus
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: libranexus-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./config/prometheus.yml:/etc/prometheus/prometheus.yml
+    networks:
+      - libranexus
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: libranexus-grafana
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./config/grafana:/etc/grafana/provisioning
+    networks:
+      - libranexus
+
+  catalog-service:
+    build:
+      context: .
+      dockerfile: Dockerfile.catalog
+    container_name: libranexus-catalog
+    environment:
+      - DATABASE_URL=postgres://libranexus:dev_password_change_in_prod@postgres:5432/libranexus?sslmode=disable
+      - PORT=8081
+    ports:
+      - "8081:8081"
+    networks:
+      - libranexus
+    depends_on:
+      - postgres
+
+  circulation-service:
+    build:
+      context: .
+      dockerfile: Dockerfile.circulation
+    container_name: libranexus-circulation
+    environment:
+      - DATABASE_URL=postgres://libranexus:dev_password_change_in_prod@postgres:5432/libranexus?sslmode=disable
+      - PORT=8082
+      - CATALOG_SERVICE_URL=http://catalog-service:8081
+      - MEMBERSHIP_SERVICE_URL=http://membership-service:8083
+    ports:
+      - "8082:8082"
+    networks:
+      - libranexus
+    depends_on:
+      - postgres
+      - catalog-service
+      - membership-service
+
+  membership-service:
+    build:
+      context: .
+      dockerfile: Dockerfile.membership
+    container_name: libranexus-membership
+    environment:
+      - DATABASE_URL=postgres://libranexus:dev_password_change_in_prod@postgres:5432/libranexus?sslmode=disable
+      - PORT=8083
+    ports:
+      - "8083:8083"
+    networks:
+      - libranexus
+    depends_on:
+      - postgres
+
+  api-gateway:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    container_name: libranexus-api-gateway
+    environment:
+      - PORT=8080
+      - CATALOG_SERVICE_URL=http://catalog-service:8081
+      - CIRCULATION_SERVICE_URL=http://circulation-service:8082
+      - MEMBERSHIP_SERVICE_URL=http://membership-service:8083
+    ports:
+      - "8080:8080"
+    networks:
+      - libranexus
+    depends_on:
+      - catalog-service
+      - circulation-service
+      - membership-service
+
+networks:
+  libranexus:

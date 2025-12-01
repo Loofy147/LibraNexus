@@ -1,0 +1,28 @@
+# kong.yml
+_format_version: "3.0"
+
+services:
+- name: catalog-service
+  url: http://catalog-service:8080
+  routes:
+  - name: catalog-routes
+    paths:
+    - /api/v1/catalog
+- name: circulation-service
+  url: http://circulation-service:8080
+  routes:
+  - name: circulation-routes
+    paths:
+    - /api/v1/circulation
+- name: membership-service
+  url: http://membership-service:8080
+  routes:
+  - name: membership-routes
+    paths:
+    - /api/v1/members
+
+plugins:
+- name: rate-limiting
+  config:
+    minute: 100
+    policy: local
