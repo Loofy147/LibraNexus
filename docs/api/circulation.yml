@@ -1,0 +1,73 @@
+openapi: 3.0.0
+info:
+  title: LibraNexus Circulation Service
+  version: 1.0.0
+paths:
+  /checkout:
+    post:
+      summary: Checkout an item for a member
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CheckoutRequest'
+      responses:
+        '201':
+          description: Item checked out
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Checkout'
+  /return:
+    post:
+      summary: Return a checked out item
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReturnRequest'
+      responses:
+        '200':
+          description: Item returned
+components:
+  schemas:
+    Checkout:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        member_id:
+          type: string
+          format: uuid
+        item_id:
+          type: string
+          format: uuid
+        checkout_date:
+          type: string
+          format: date-time
+        due_date:
+          type: string
+          format: date-time
+        status:
+          type: string
+    CheckoutRequest:
+      type: object
+      properties:
+        member_id:
+          type: string
+          format: uuid
+        item_id:
+          type: string
+          format: uuid
+    ReturnRequest:
+      type: object
+      properties:
+        member_id:
+          type: string
+          format: uuid
+        item_id:
+          type: string
+          format: uuid
