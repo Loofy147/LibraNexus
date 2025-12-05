@@ -19,7 +19,6 @@ func (ce *ChaosEngine) RegisterExperiments() {
 
 // DatabaseLatencyExperiment injects latency into database operations
 func (ce *ChaosEngine) DatabaseLatencyExperiment(targetLatency time.Duration) ChaosExperiment {
-	latencyInjected := false
 	var originalDB *sql.DB
 
 	return ChaosExperiment{
@@ -51,7 +50,6 @@ func (ce *ChaosEngine) DatabaseLatencyExperiment(targetLatency time.Duration) Ch
 				},
 				Execute: func(ctx context.Context) error {
 					// Wrap database calls with artificial latency
-					latencyInjected = true
 					originalDB = ce.db
 					// In production, this would use a proxy or network policy
 					return nil
@@ -63,7 +61,6 @@ func (ce *ChaosEngine) DatabaseLatencyExperiment(targetLatency time.Duration) Ch
 				Type:   "remove-latency",
 				Target: "postgres-primary",
 				Execute: func(ctx context.Context) error {
-					latencyInjected = false
 					ce.db = originalDB
 					return nil
 				},
@@ -83,7 +80,6 @@ func (ce *ChaosEngine) DatabaseLatencyExperiment(targetLatency time.Duration) Ch
 
 // CircuitBreakerExperiment validates circuit breaker behavior
 func (ce *ChaosEngine) CircuitBreakerExperiment() ChaosExperiment {
-	searchBackendKilled := false
 
 	return ChaosExperiment{
 		Name:       "search-backend-failure",
@@ -107,7 +103,6 @@ func (ce *ChaosEngine) CircuitBreakerExperiment() ChaosExperiment {
 					"interval": "0s",
 				},
 				Execute: func(ctx context.Context) error {
-					searchBackendKilled = true
 					// In production: kubectl delete pod meilisearch-xyz
 					return nil
 				},
@@ -118,7 +113,6 @@ func (ce *ChaosEngine) CircuitBreakerExperiment() ChaosExperiment {
 				Type:   "restore-pod",
 				Target: "meilisearch",
 				Execute: func(ctx context.Context) error {
-					searchBackendKilled = false
 					// In production: kubectl scale deployment meilisearch --replicas=1
 					return nil
 				},
