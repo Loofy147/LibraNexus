@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"libranexus/internal/circulation"
 	"libranexus/internal/clients"
-	"libranexus/pkg/eventstore"
+	"github.com/jules-labs/go-eventstore"
 	"log"
 	"net/http"
 	"os"

@@ -4,7 +4,7 @@ package main
 import (
 	"context"
 	"database/sql"
-	"libranexus/chaos"
+	"github.com/jules-labs/go-chaos"
 	"log"
 	"os"
 	"time"

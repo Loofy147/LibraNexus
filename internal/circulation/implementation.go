@@ -7,7 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"libranexus/internal/clients"
-	"libranexus/pkg/eventstore"
+	"github.com/jules-labs/go-eventstore"
 	"log"
 	"time"
 
