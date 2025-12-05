@@ -96,7 +96,7 @@ type ChaosEngine struct {
 
 func NewChaosEngine(db *sql.DB) *ChaosEngine {
 	return &ChaosEngine{
-		tracer:      otel.Tracer("libranexus/chaos"),
+		tracer:      otel.Tracer("github.com/jules-labs/go-chaos"),
 		db:          db,
 		experiments: make([]ChaosExperiment, 0),
 		results:     make([]ExperimentResult, 0),

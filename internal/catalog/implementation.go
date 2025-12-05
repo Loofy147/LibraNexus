@@ -6,7 +6,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"libranexus/pkg/eventstore"
+	"github.com/jules-labs/go-eventstore"
 
 	"github.com/google/uuid"
 )

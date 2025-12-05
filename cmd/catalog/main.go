@@ -5,7 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"libranexus/internal/catalog"
-	"libranexus/pkg/eventstore"
+	"github.com/jules-labs/go-eventstore"
 	"log"
 	"net/http"
 	"os"

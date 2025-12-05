@@ -1,4 +1,3 @@
-// pkg/eventstore/eventstore.go
 package eventstore
 
 import (
